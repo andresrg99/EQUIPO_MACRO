@@ -1,0 +1,161 @@
+library(lubridate)
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(ggthemes)
+library(plyr)
+library(forecast)
+library(stats)
+library(tseries)
+library(performance)
+library(quantmod)
+library(lmtest)
+library(moments)
+library(dynlm)
+library(fpp2)
+library(readxl)
+library(mlr)
+library(zoo)
+# Lectura y limpieza de datos-------------------
+PWTI <- read_csv("Documents/MACROECONOMETRÍA/Proyecto/DATOS/Crude Oil WTI Futures Historical Data-4.csv")
+PWTI$Fechas     <- parse_date_time(PWTI$Date, "mdy")
+PWTI$Volumen    <- as.numeric(sub("K", "e3", PWTI$Vol., fixed = TRUE)) #convierte a miles las K
+PWTI
+vector <-  zoo(PWTI$Volumen)                         # convierte al vector en un objeto zoo
+volumen_completo <- na.locf(vector, fromLast = TRUE) # rellena los NA con valores pasados
+# 1639 entradas
+logp = log(PWTI$Price)   # produce NAs
+logp[is.nan(logp)] = .01 # cambiando NAs por .01
+#1640 entradas
+
+# log(precios) gráficamente
+ggplot(PWTI)+
+        geom_line(aes(x = PWTI$Fechas, y = logp), 
+                  color = "steelblue4", size = .8)+
+        labs(x = "Fechas",
+             y = "log(Precios)",
+             title = "log(Precios) de futuros de petróleo WTI en el tiempo")+
+        theme_clean()
+ 
+
+#Las series de tiempo (volumen y precios)
+volumen.ts             <- ts(volumen_completo, frequency = 365)
+logp.ts                <- ts(logp, frequency = 365)
+data.ts                <- cbind.data.frame(log(volumen.ts), logp.ts[-1])
+
+
+# LOG(PRECIOS) ~ LOG(VOLUMEN)------------
+modelop_y_v         <- tslm(data = data.ts, logp.ts[-1] ~ log(volumen.ts))
+
+summary(modelop_y_v)
+
+dataplot            <- cbind.data.frame(modelop_y_v$fitted.values, log(volumen.ts), logp.ts[-1], 
+                                        PWTI$Fechas[-1],modelop_y_v$residuals)
+
+# Gráficamente: modelado vs observado.
+ggplot(dataplot) +
+  geom_line(aes(x=PWTI$Fechas[-1], y=modelop_y_v$fitted.values), 
+            col = "steelblue4", size = .8)+ 
+  geom_line(aes(x=PWTI$Fechas[-1], y = modelop_y_v$residuals), col = "black", size = .4)+
+  geom_line(aes(x=PWTI$Fechas[-1], y = logp.ts[-1]), col = "green4", size = .4)+
+  labs(x = "Fechas", 
+       y = "Observaciones (verde)
+             Predicciones (azul)
+             Residuos (negro)")+
+  theme_clean()
+
+#Gráficamente sin residuos
+ggplot(dataplot) +
+  geom_line(aes(x=PWTI$Fechas[-1], y=modelop_y_v$fitted.values), col = "steelblue4", group = 1)+
+  geom_line(aes(x=PWTI$Fechas[-1], y = logp.ts[-1]), col = "green4", size = .4, group = 2)
+  
+
+
+# LOG(PRECIOS) ~ LOG(TIPO_DE_CAMBIO)-----------
+#Lectura, limpieza y formato
+usdmultilateral <- read_csv("Downloads/Multilateral_USDExch_Rate.csv")
+fechastc      <- ts(PWTI$Fechas[-c(seq(1617:1640))], frequency = 365)
+preciostc     <- ts(logp.ts[-c(seq(1617:1640))], frequency = 365)
+logusd        <- ts(log(as.numeric(usdmultilateral$DTWEXBGS)), frequency = 365)
+vectortc      <-  zoo(logusd)                                # convierte al vector en un objeto zoo
+usdmultilateraltc <- na.locf(vectortc, fromLast = TRUE)      # rellena los NA con valores pasados
+volumen       <- volumen.ts[-c(seq(1617:1639))]
+dataplottc    <- cbind.data.frame(preciostc, fechastc, usdmultilateraltc)
+
+View(fechastc)
+
+modelotc      <- tslm(data = dataplottc, formula = preciostc ~ usdmultilateraltc)
+summary(modelotc)
+dataplottc2   <- cbind.data.frame(preciostc, fechastc, usdmultilateraltc,
+                                  modelotc$residuals, modelotc$fitted.values, volumen) 
+
+# Gráficamente: modelado vs observado
+ggplot(dataplottc2) +
+  geom_line(aes(x=fechastc, y = modelotc$fitted.values), col = "steelblue4", size = .7, group = 1)+
+  geom_line(aes(x=fechastc, y = modelotc$residuals), col = "black", size = .6, group = 2)+
+  geom_line(aes(x=fechastc, y = preciostc), col = "green4", size = .4)+
+  labs(x = "Fechas", 
+       y = "Observaciones (verde)
+             Predicciones (azul)
+             Residuos (negro)")+
+  theme_clean()
+
+#Gráficamente sin residuos
+ggplot(dataplottc2) +
+  geom_line(aes(x=fechastc, y = modelotc$fitted.values), col = "steelblue4", size = .7, group = 1)+
+  geom_line(aes(x=fechastc, y = preciostc), col = "black", size = .6, group = 2)
+
+
+
+# LOG(PRECIOS) ~ LOG(VOLUMEN) + LOG(TIPO_DE_CAMBIO)----------------
+modelotcv     <- tslm(data = dataplottc2, formula = preciostc ~ usdmultilateraltc + volumen)
+summary(modelotcv)
+dataplottcv   <- cbind.data.frame(preciostc, PWTI$Fechas[-c(seq(1617:1640))], usdmultilateraltc, modelotcv$residuals, modelotcv$fitted.values, volumen) 
+                                  
+#Gráficamente: modelado vs observado.
+ggplot(dataplottcv) +
+  geom_line(aes(x=PWTI$Fechas[-c(seq(1617:1640))], y = modelotcv$fitted.values), col = "steelblue4", size = .7, group = 1)+
+  geom_line(aes(x=PWTI$Fechas[-c(seq(1617:1640))], y = modelotcv$residuals), col = "black", size = .6, group = 2)+
+  geom_line(aes(x=PWTI$Fechas[-c(seq(1617:1640))], y = preciostc), col = "green4", size = .4)+
+  labs(x = "Fechas", 
+       y = "Observaciones (verde)
+             Predicciones (azul)
+             Residuos (negro)")+
+  theme_clean()
+
+#Gráficamente sin residuos
+ggplot(dataplottcv) +
+  geom_line(aes(x=fechastc, y = modelotcv$fitted.values), col = "steelblue4", size = .7, group = 1)+
+  geom_line(aes(x=fechastc, y = preciostc), col = "black", size = .6, group = 2)
+
+
+# LOG(PRECIOS) ~ LOG(VOLUMEN) + LOG(TIPO_DE_CAMBIO) + LOG(TASA DE INTERÉS)----------------
+
+tasaint    <- read_csv("Downloads/FEDEXCHRATE.csv")
+tail(tasaint)
+tail(tasaint)
+tasaint.ts <- ts(tasaint$DFEDTARU, frequency = 365)
+
+tasaint.ts <- tasaint.ts[-c(seq(1617:2231))]
+
+datatcvi   <- cbind.data.frame(preciostc, PWTI$Fechas[-c(seq(1617:1640))], usdmultilateraltc, volumen, tasaint.ts) 
+View(tasaint.ts)
+tasaint.ts <- rev(tasaint.ts)
+modelotcvi     <- tslm(data = datatcvi, formula = preciostc ~ usdmultilateraltc + tasaint.ts)
+summary(modelotcvi)
+
+datatcvi2      <- cbind.data.frame(preciostc, PWTI$Fechas[-c(seq(1617:1640))], usdmultilateraltc, volumen, rev(tasaint.ts),
+                              modelotcvi$fitted.values, modelotcvi$residuals) 
+
+#Gráficamente: modelado vs observado. 
+ggplot(datatcvi2)+
+  geom_line(aes(x = PWTI$Fechas[-c(seq(1617:1640))], y = modelotcvi$fitted.values), col = "steelblue4", size = .5, group = 1)+
+  geom_line(aes(x = PWTI$Fechas[-c(seq(1617:1640))], y = preciostc), col = "green4", size = .5, group = .2)+
+  geom_line(aes(x = PWTI$Fechas[-c(seq(1617:1640))], y = modelotcvi$residuals), col = "black", size = .5, group = 3)
+     
+#Gráficamente sin residuos
+ggplot(datatcvi2)+
+  geom_line(aes(x = PWTI$Fechas[-c(seq(1617:1640))], y = modelotcvi$fitted.values), col = "steelblue4", size = .5, group = 1)+
+  geom_line(aes(x = PWTI$Fechas[-c(seq(1617:1640))], y = preciostc), col = "green4", size = .5, group = .2)
+       
+  
